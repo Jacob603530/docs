@@ -1,5 +1,5 @@
 import 'uno.css';
-import { type Router, useRouter, type Theme } from 'vitepress';
+import { type Router, type Theme, useRouter } from 'vitepress';
 import DefaultTheme from 'vitepress/theme';
 import {
   defineComponent,
@@ -31,38 +31,127 @@ const ScrollbarWrapper = defineComponent(() => {
   };
 });
 
+const isInViewport = (element: HTMLElement): boolean => {
+  const rect = element.getBoundingClientRect();
+  const offset = window.innerHeight * 0.15;
+  return rect.top - offset >= 0 && rect.bottom + offset <= window.innerHeight;
+};
+
+const checkAllImagesLoaded = () => {
+  const images = document.images;
+  for (let i = 0; i < images.length; i++) {
+    if (!images[i].complete) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const delay = (n = 0) => new Promise((r) => setTimeout(r, n));
+
+let lastHashEl: HTMLElement | undefined = undefined;
+let newPageFlag = true;
+if (!import.meta.env.SSR) {
+  setTimeout(() => {
+    newPageFlag = false;
+  }, 1000);
+}
+const animateHashEl = async (hashEl?: HTMLElement) => {
+  if (location.hash) {
+    hashEl ??= document.querySelector<HTMLElement>(location.hash) || undefined;
+  }
+  if (!hashEl) return;
+  const hintCls = 'animate-hash-hint';
+  if (lastHashEl) {
+    lastHashEl.classList.remove(hintCls);
+  }
+  if (hashEl.classList.contains(hintCls)) {
+    hashEl.classList.remove(hintCls);
+    await delay(25);
+  }
+  hashEl.classList.add(hintCls);
+  lastHashEl = hashEl;
+  const ms = 500 * 2 * (newPageFlag ? 5 : 2);
+  newPageFlag = false;
+  await delay(ms);
+  hashEl.classList.remove(hintCls);
+  if (lastHashEl === hashEl) {
+    lastHashEl = undefined;
+  }
+};
+
+const getRedirectArg = (): string => {
+  return new URLSearchParams(location.search).get('r') || '';
+};
+
+// 避免首次进入页面快速切换时出现闪烁
+const removeHiddenLayoutStyle = () => {
+  const style = document.getElementById(
+    'hidden-layout-style',
+  ) as HTMLStyleElement | null;
+  if (style) {
+    style.parentElement?.removeChild(style);
+  }
+};
+
 const handleCompatRedirect = async (router: Router) => {
   // 兼容旧链接/短链重定向
   const u = location.href.substring(location.origin.length);
+  const replace = async (url: string) => {
+    history.replaceState(null, '', url);
+    await router.go(url);
+  };
   if (location.pathname.startsWith('/selector/')) {
     if (location.pathname.at(-1) === '/') {
-      router.go('/guide/selector');
+      replace('/guide/selector');
     } else {
-      router.go(location.pathname.replace('/selector/', '/guide/'));
+      replace(location.pathname.replace('/selector/', '/guide/'));
     }
-  } else if (location.pathname === '/subscription/') {
-    router.go('/guide/subscription');
+  } else if (
+    location.pathname === '/subscription/' ||
+    location.pathname === '/subscription'
+  ) {
+    await replace('/guide/subscription');
   } else if (location.pathname === '/') {
-    const r = new URLSearchParams(location.search).get('r');
+    const r = getRedirectArg();
+    const go = async (to: string) => {
+      await router.go(to);
+      removeHiddenLayoutStyle();
+    };
     if (r === '1') {
-      router.go('/guide/snapshot#how-to-upload');
+      go('/guide/snapshot#how-to-upload');
     } else if (r === '2') {
-      router.go('/guide/faq#restriction');
+      go('/guide/faq#restriction');
     } else if (r === '3') {
-      router.go('/guide/faq#adb_failed');
+      go('/guide/faq#adb_failed');
     } else if (r === '4') {
       location.href = 'https://shizuku.rikka.app';
+      removeHiddenLayoutStyle();
       return;
     } else if (r === '5') {
-      router.go('/guide/subscription');
+      go('/guide/subscription');
     } else if (r === '6') {
-      router.go('/guide/faq#power');
+      go('/guide/faq#power');
     } else if (r === '7') {
-      router.go('/guide/faq#exact-activity');
+      go('/guide/faq#exact-activity');
     } else if (r === '8') {
-      router.go('/guide/faq#forced-tap');
+      go('/guide/faq#forced-tap');
     } else if (r === '9') {
-      router.go('/guide/faq#work-profile');
+      go('/guide/faq#work-profile');
+    } else if (r === '10') {
+      go('/guide/sponsor');
+    } else if (r === '11') {
+      go('/guide/privacy');
+    } else if (r === '12') {
+      go('/guide/terms');
+    } else if (r === '13') {
+      go('/guide/#install');
+    } else if (r === '14') {
+      go('/guide/faq#shizuku');
+    } else if (r === '15') {
+      go('/guide/snapshot#by-screenshot');
+    } else {
+      removeHiddenLayoutStyle();
     }
   } else if (u === '/guide/faq#fail_setting_secure_settings') {
     location.hash = 'adb_failed';
@@ -72,29 +161,54 @@ const handleCompatRedirect = async (router: Router) => {
     const hashEl = await (async () => {
       const href = location.href;
       let i = 0;
-      while (i < 20) {
+      while (i < 25) {
         if (href !== location.href) return;
         const el = document.querySelector<HTMLElement>(location.hash);
         if (el) {
           return el;
         }
         i++;
-        await new Promise((r) => setTimeout(r, 250));
+        await delay(100);
       }
     })();
     if (hashEl) {
-      const hintCls = 'animate-hash-hint';
-      hashEl.classList.add(hintCls);
-      await new Promise((r) => setTimeout(r, 3000));
-      hashEl.classList.remove(hintCls);
+      if (!isInViewport(hashEl)) {
+        // 图片加载完成会导致排版变化, 即使提前使用相同比例的占位图也无法避免排版变化
+        let i = 0;
+        while (i < 25 && !checkAllImagesLoaded()) {
+          await new Promise((r) => setTimeout(r, 100));
+          i++;
+        }
+        const anchor = document.querySelector(
+          `a.header-anchor[href="${location.hash}"]`,
+        ) as HTMLAnchorElement;
+        if (anchor) {
+          anchor.click();
+        } else {
+          hashEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+      animateHashEl(hashEl);
     }
   }
 };
+
+if (!import.meta.env.SSR) {
+  window.addEventListener('hashchange', async () => {
+    animateHashEl();
+  });
+}
 
 const Redirect = defineComponent(() => {
   const router = useRouter();
   onMounted(() => {
     handleCompatRedirect(router);
+    router.onAfterPageLoad = () => {
+      nextTick().then(async () => {
+        await delay(100);
+        animateHashEl();
+      });
+    };
   });
   return () => {};
 });

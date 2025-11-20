@@ -104,6 +104,15 @@ export interface RawGlobalGroup extends RawGroupProps, RawGlobalRuleProps {
    * 全局规则组的规则列表
    */
   rules: RawGlobalRule[];
+
+  /**
+   * 如果 {@link RawSubscription.apps} 下的应用下存在一个名称以此开头并且 {@link RawAppGroup.ignoreGlobalGroupMatch} 不为 `true` 的规则组存在, 则此全局规则组不会匹配此应用, 只判断是否存在, 不判断是否启用
+   *
+   * 当值为 `''` 即长度为 0 的字符串 时, 等价于设置为当前全局规则组的 name
+   *
+   * 这等价于在 {@link RawGlobalRuleProps.apps} 中自动配置 `{id:'xxx', enable:false}`
+   */
+  disableIfAppGroupMatch?: string;
 }
 
 /**
@@ -190,6 +199,11 @@ export interface RawAppGroup extends RawGroupProps, RawAppRuleProps {
    * ```
    */
   rules: IArray<RawAppRule | string>;
+
+  /**
+   * 避免影响到某个全局规则组, 见 {@link RawGlobalGroup.disableIfAppGroupMatch}
+   */
+  ignoreGlobalGroupMatch?: boolean;
 }
 
 /**
@@ -236,39 +250,9 @@ export interface RawCommonProps {
   actionDelay?: Integer;
 
   /**
-   * 注意: 将在未来版本弃用此属性, 请使用 {@link fastQuery} 代替
-   *
-   * 如果开启, 此规则下的所有 `末尾属性选择器`的`第一个属性选择表达式`符合下面的结构之一的选择器 将使用快速查找
-   *
-   * - [id='abc']
-   * - [vid='abc']
-   * - [text='abc']
-   * - [text^='abc']
-   * - [text*='abc']
-   * - [text$='abc']
-   *
-   * 比如 `A > B + C[id='x'][childCount=2]` 符合, 但 `A > B + C[childCount=2][id='x']` 不符合
-   *
-   * 它的底层原理是 跳过手动遍历所有节点 直接调用 [findAccessibilityNodeInfosByViewId](https://developer.android.google.cn/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String)) / [findAccessibilityNodeInfosByText](https://developer.android.google.cn/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByText(java.lang.String)) 得到可匹配节点
-   *
-   * 大多数情况下都能查询到, 在少数某些复杂结构下, 即使目标节点存在, 快速查询也不一定查询到
-   *
-   * 比如 [Image &lt; \@View + View &gt;2 [text*='广告']](https://github.com/gkd-kit/subscription/blob/1ae87452d287b558f58f9c4e4448a3190e212ca1/src/apps/com.zidongdianji.ts#L26) 虽然符合快速查询的条件但是使用 `findAccessibilityNodeInfosByText("广告")` 并不能查询到节点
-   *
-   * 它是优点是快速, 因为遍历所有节点是一个耗时行为, 虽然多数情况下这种耗时较低
-   *
-   * 但是在某些软件比如 哔哩哔哩 的开屏广告在这种耗时下延迟可达 1-2s, 这也是导致 [gkd-kit/gkd#60](https://github.com/gkd-kit/gkd/issues/60) 的原因
-   *
-   * 如果你想对某个局部选择器关闭快速查找,只需要调整你的选择器的属性选择表达式的顺序使得它不符合快速查找的条件即可
-   *
-   * @default false
-   */
-  quickFind?: boolean;
-
-  /**
    * 如果开启, 此规则下的所有满足 **特定格式的选择器** 将使用快速查找优化查询速度
    *
-   * 详细文档请查看 [查询优化](https://gkd.li/selector/optimize)
+   * 详细文档请查看 [查询优化](https://gkd.li/guide/optimize)
    *
    * @default false
    */
@@ -334,21 +318,25 @@ export interface RawCommonProps {
   actionMaximum?: Integer;
 
   /**
-   * 当规则因为 matchTime/actionMaximum 而休眠时, 如何唤醒此规则
+   * 决定如何重置 matchTime/actionMaximum，如果规则因 matchTime/actionMaximum 而休眠, 重置可以唤醒规则
    *
    * @default 'activity'
    *
    * @example
    * 'activity'
-   * // 当 activity 刷新时, 唤醒规则
+   * // 当 activity 刷新时, 重置规则
    * // 刷新 activity 并不代表 activityId 变化
    * // 如 哔哩哔哩视频播放页 底部点击推荐视频 进入另一个 视频播放页, 进入了新 activity 但是 activityId 并没有变化
    *
    * @example
+   * 'match'
+   * // 在应用内由不匹配界面切换为匹配界面时, 重置规则
+   *
+   * @example
    * 'app'
-   * // 重新进入 app 时, 唤醒规则
+   * // 重新进入 app 时, 重置规则
    */
-  resetMatch?: 'activity' | 'app';
+  resetMatch?: 'activity' | 'match' | 'app';
 
   /**
    * 与这个 key 的 rule 共享 cd
@@ -396,15 +384,15 @@ export interface RawCommonProps {
 
   /**
    * 设置一个优先级时间, 在优先级时间内, 此规则为 优先级规则
-   * 
+   *
    * 如果规则参与匹配, 匹配顺序为 优先级规则(内部 order 排序) -> 普通规则(内部 order 排序)
-   * 
+   *
    * 当新无障碍事件到来时, 如果当前匹配规则是普通规则, 则中断匹配操作重新匹配
-   * 
+   *
    * 优先时间过后, 规则将变为普通规则
-   * 
+   *
    * 使用场景: 某些应用开启很多规则, 导致开屏一类规则被其他规则阻塞, 可以设置优先级时间让开屏规则优先匹配
-   * 
+   *
    * 注意: 如果全部规则都是优先级规则或只有一个规则, 则不会发生中断行为
    */
   priorityTime?: Integer;
@@ -503,6 +491,10 @@ export interface RawRuleProps extends RawCommonProps {
    * @example
    * `longClickCenter`
    * // 与 clickCenter 类似, 长按时间为 400 毫秒
+   * 
+   * @example
+   * `none`
+   * // 什么都不做, 仅作为匹配标记使用
    */
   action?:
     | 'click'
@@ -511,7 +503,8 @@ export interface RawRuleProps extends RawCommonProps {
     | 'back'
     | 'longClick'
     | 'longClickNode'
-    | 'longClickCenter';
+    | 'longClickCenter'
+    | 'none';
 
   /**
    * 在使用 clickCenter/longClickCenter 时的自定义点击位置
@@ -546,6 +539,11 @@ export interface RawRuleProps extends RawCommonProps {
    * 一个或者多个合法的 GKD 选择器, 如果存在一个选择器匹配上节点, 则停止匹配此规则
    */
   excludeMatches?: IArray<string>;
+
+  /**
+   * 一个或者多个合法的 GKD 选择器, 如果所有选择器匹配上节点, 则停止匹配此规则
+   */
+  excludeAllMatches?: IArray<string>;
 }
 
 /**
@@ -620,26 +618,40 @@ export interface RawAppRuleProps {
   /**
    * 如果应用版本名称包含在此列表中, 则匹配
    *
+   * @deprecated {@link versionName}
    */
   versionNames?: IArray<string>;
 
   /**
    * 如果应用版本名称包含在此列表中, 则排除匹配, 优先级高于 versionNames
    *
+   * @deprecated {@link versionName}
    */
   excludeVersionNames?: IArray<string>;
 
   /**
    * 如果应用版本代码包含在此列表中, 则匹配
    *
+   * @deprecated {@link versionCode}
    */
   versionCodes?: IArray<Integer>;
 
   /**
    * 如果应用版本代码包含在此列表中, 则排除匹配, 优先级高于 versionCodes
    *
+   * @deprecated {@link versionCode}
    */
   excludeVersionCodes?: IArray<Integer>;
+
+  /**
+   * 应用版本代码(整数)匹配规则
+   */
+  versionCode?: IntegerMatcher;
+
+  /**
+   * 应用版本名称(字符串)匹配规则
+   */
+  versionName?: StringMatcher;
 }
 
 /**
@@ -678,7 +690,58 @@ export interface RawGlobalRuleProps {
 }
 
 /**
+ * 整数匹配规则
+ *
+ * 优先级: exclude > include > (minimum/maximum)
+ */
+export type IntegerMatcher = {
+  /**
+   * 如果在此列表中, 则排除匹配
+   */
+  exclude?: IArray<Integer>;
+
+  /**
+   * 如果不在此列表中, 则排除匹配
+   */
+  include?: IArray<Integer>;
+
+  /**
+   * 如果小于此值, 则排除匹配
+   */
+  minimum?: Integer;
+
+  /**
+   * 如果大于此值, 则排除匹配
+   */
+  maximum?: Integer;
+};
+
+/**
+ * 字符串匹配规则
+ *
+ * 优先级: exclude > include > pattern
+ */
+export type StringMatcher = {
+  /**
+   * 如果在此列表中, 则排除匹配
+   */
+  exclude?: IArray<string>;
+
+  /**
+   * 如果不在此列表中, 则排除匹配
+   */
+  include?: IArray<string>;
+
+  /**
+   * 如果匹配此正则表达式, 则匹配
+   */
+  pattern?: string;
+};
+
+/**
  * 位置类型, 用以描述自定义点击位置
+ *
+ * 需要注意是相对目标节点位置, 不是相对屏幕位置
  *
  * 使用 left/top/right/bottom 四条边实现定位, 此对象只能有两个属性, 也就是两条相邻边
  *

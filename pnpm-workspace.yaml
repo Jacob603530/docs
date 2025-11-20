@@ -1,3 +1,8 @@
 packages:
-  - 'docs'
-  - 'api'
+  - docs
+  - api
+onlyBuiltDependencies:
+  - esbuild
+  - core-js
+public-hoist-pattern:
+  - '@vitejs/*'
